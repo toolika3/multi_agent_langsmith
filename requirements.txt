@@ -22,4 +22,45 @@ langchain-anthropic
 langchain-google-vertexai
 openevals
 langgraph-swarm
+
+
+def summarize_cluster_texts(sample_texts):
+    prompt = (
+        "Analyze the following IT ticket descriptions and propose ONE concise category "
+        "label that describes them. Follow these rules strictly:\n\n"
+        "1. The label must be 3 to 4 words long.\n"
+        "2. Do not use special characters (#, &, @, etc.).\n"
+        "3. Do not use acronyms (e.g., VPN, SSO, MFA). Use full descriptive words instead.\n"
+        "4. Use consistent phrasing to avoid duplicates. Example: 'Authentication Access Issue' "
+        "and 'Authentication and Access Issue' should resolve to a single, consistent form.\n"
+        "5. If descriptions involve hardware (devices, servers, peripherals), ensure "
+        "the category reflects hardware support explicitly.\n"
+        "6. Return only the category label, no extra text.\n\n"
+        "Ticket samples:\n" + "\n".join(f"- {t}" for t in sample_texts[:5])
+    )
+
+    request = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 50,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 300
+        }
+    }
+
+    response = bedrock.invoke_model(
+        modelId=SONNET_MODEL_ID,
+        body=json.dumps(request)
+    )
+    body = json.loads(response["body"].read())
+    text_content = ""
+    for block in body.get("messages", body.get("content", [])):
+        if block.get("type") == "text":
+            text_content = block.get("text")
+            break
+    return text_content.strip().split("\n")[0]
+
 langchain-together
