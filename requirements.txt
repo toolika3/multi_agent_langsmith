@@ -64,3 +64,172 @@ def summarize_cluster_texts(sample_texts):
     return text_content.strip().split("\n")[0]
 
 langchain-together
+
+
+
+
+
+Great idea—let’s make the sample size adaptive based on how tight or spread out each cluster is. Below are drop-in utilities that (1) measure intra-cluster variance, (2) map variance → sample size, and (3) pick diverse examples (not just the first N) so the LLM sees representative tickets.
+
+1) Compute intra-cluster variance(cosine-similarity)
+import numpy as np
+from collections import defaultdict
+
+def _normalize_rows(X: np.ndarray) -> np.ndarray:
+    # Safe row-normalization for cosine operations
+    norms = np.linalg.norm(X, axis=1, keepdims=True) + 1e-12
+    return X / norms
+
+def cluster_cohesion_and_variance(embeddings: np.ndarray, labels: np.ndarray):
+    """
+    Returns dict: cluster_id -> {"cohesion": float, "variance": float, "centroid": np.ndarray, "indices": list}
+    - cohesion = mean cosine similarity to cluster centroid (higher is tighter)
+    - variance = 1 - cohesion  (lower is tighter)
+    """
+    out = {}
+    by_cluster = defaultdict(list)
+    for idx, c in enumerate(labels):
+        by_cluster[c].append(idx)
+
+    X_norm = _normalize_rows(embeddings)
+
+    for c, idxs in by_cluster.items():
+        Xc = X_norm[idxs]
+        centroid = Xc.mean(axis=0)
+        centroid = centroid / (np.linalg.norm(centroid) + 1e-12)
+
+        sims = (Xc @ centroid)             # cosine similarity to centroid
+        cohesion = float(np.mean(sims))    # in [-1, 1], usually ~0.7–0.98 for good clusters
+        variance = 1.0 - cohesion
+
+        out[c] = {
+            "cohesion": cohesion,
+            "variance": variance,
+            "centroid": centroid,
+            "indices": idxs
+        }
+    return out
+
+2)Map variance → dynamic sample size
+
+You can tune these bounds; this mapping keeps prompts short for tight clusters and expands context for loose ones.
+
+def sample_count_from_variance(variance: float,
+                               min_samples: int = 5,
+                               max_samples: int = 10,
+                               lo_var: float = 0.05,   # very tight
+                               hi_var: float = 0.25):  # quite loose
+    """
+    Linearly scales sample count between min_samples and max_samples.
+    - variance <= lo_var  -> min_samples
+    - variance >= hi_var  -> max_samples
+    """
+    if variance <= lo_var:
+        return min_samples
+    if variance >= hi_var:
+        return max_samples
+    # linear interpolation
+    ratio = (variance - lo_var) / (hi_var - lo_var)
+    return int(round(min_samples + ratio * (max_samples - min_samples)))
+
+3)Pick representative, diverse samples (farthest-point sampling)
+
+Instead of taking the first N items, this picks examples that are spread out within the cluster—useful when variance is high.
+def select_diverse_samples(embeddings: np.ndarray,
+                           indices: list[int],
+                           k: int,
+                           prefer_short_texts: bool = True,
+                           texts: list[str] | None = None,
+                           max_chars_per_item: int = 400):
+    """
+    Farthest-point sampling in cosine space to get diverse representatives.
+    Optionally prefers shorter texts to keep the prompt compact.
+    """
+    if k >= len(indices):
+        return indices  # nothing to sample down
+
+    X = embeddings[indices]
+    X = _normalize_rows(X)
+
+    # Seed with point closest to centroid = most "central" example
+    centroid = X.mean(axis=0)
+    centroid /= (np.linalg.norm(centroid) + 1e-12)
+    sims = X @ centroid
+    seed = int(np.argmax(sims))
+    chosen = [seed]
+    remaining = set(range(len(indices))) - {seed}
+
+    # Greedy farthest-point selection
+    # Maintain min distance to chosen set (cosine distance = 1 - sim)
+    min_dist = np.ones(len(indices))
+    min_dist[:] = 2.0  # larger than possible cosine distance
+    min_dist[seed] = 0.0
+
+    for _ in range(k - 1):
+        # update min distances to chosen
+        last = chosen[-1]
+        sims_last = X @ X[last]
+        d_last = 1.0 - sims_last
+        min_dist = np.minimum(min_dist, d_last)
+
+        # pick farthest remaining
+        cand_list = list(remaining)
+        far_idx_local = cand_list[int(np.argmax(min_dist[c] for c in cand_list))]
+        chosen.append(far_idx_local)
+        remaining.remove(far_idx_local)
+
+    chosen_indices = [indices[i] for i in chosen]
+
+    # Optional: bias toward shorter texts to save tokens
+    if prefer_short_texts and texts is not None:
+        chosen_indices.sort(key=lambda i: len(texts[i]))
+    # Optional: truncate very long items (safe side)
+    if texts is not None and max_chars_per_item:
+        for i in chosen_indices:
+            if len(texts[i]) > max_chars_per_item:
+                texts[i] = texts[i][:max_chars_per_item]
+
+    return chosen_indices
+4)Wire it into your labeling step
+
+# embeddings_np: (N, D) float32 ticket embeddings
+# clusters: array of shape (N,) with cluster ids from KMeans
+# texts: list of concatenated short_desc + long_desc
+
+stats = cluster_cohesion_and_variance(embeddings_np, clusters)
+
+cluster_labels = {}
+for c, info in stats.items():
+    var = info["variance"]
+    idxs = info["indices"]
+
+    # decide sample count dynamically
+    n_samples = sample_count_from_variance(var, min_samples=5, max_samples=10)
+
+    # pick diverse samples
+    picked = select_diverse_samples(embeddings_np, idxs, k=n_samples, texts=texts)
+
+    # build prompt list
+    sample_texts = [texts[i] for i in picked]
+
+    # call your LLM-backed function that enforces:
+    # - 3–4 words, no special chars, no acronyms, hardware explicit
+    label = summarize_cluster_texts(sample_texts)
+    cluster_labels[c] = label
+
+# Assign labels
+tickets["category"] = [cluster_labels[c] for c in clusters]
+
+Notes & Tuning Tips
+
+Variance bounds (lo_var, hi_var): Inspect your data. If most clusters are very tight (cohesion ≥ 0.9), lower hi_var. If clusters are messy, raise it.
+
+Max samples: 10 is a good ceiling for cost; bump to 12–15 only if labels look too narrow.
+
+Diversity selection beats “top N” because it avoids sampling near-duplicates.
+
+Token safety: the max_chars_per_item guard keeps prompts lean; adjust as needed.
+
+Keep your prompt rules (no special characters, no acronyms, consistent phrasing, hardware detection) in summarize_cluster_texts() as you already set.
+
+If you want, I can fold these into your full pipeline (Titan embeddings + FAISS-CPU + Sonnet 3.7) and show a single cohesive script.
