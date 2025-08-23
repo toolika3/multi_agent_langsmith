@@ -233,3 +233,42 @@ Token safety: the max_chars_per_item guard keeps prompts lean; adjust as needed.
 Keep your prompt rules (no special characters, no acronyms, consistent phrasing, hardware detection) in summarize_cluster_texts() as you already set.
 
 If you want, I can fold these into your full pipeline (Titan embeddings + FAISS-CPU + Sonnet 3.7) and show a single cohesive script.
+
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def plot_issue_type_distribution(csv_path, category_col="category", top_n=None):
+    """
+    Reads a CSV with ticket data and plots issue type distribution.
+    
+    Parameters:
+    - csv_path: Path to CSV file containing categorized tickets
+    - category_col: Column in CSV that contains assigned categories
+    - top_n: Show only top N categories by frequency
+    """
+    # Read categorized ticket data
+    tickets_df = pd.read_csv(csv_path)
+
+    if category_col not in tickets_df.columns:
+        raise ValueError(f"Column '{category_col}' not found in CSV. Available: {tickets_df.columns.tolist()}")
+
+    # Count frequency of categories
+    category_counts = tickets_df[category_col].value_counts()
+
+    if top_n:
+        category_counts = category_counts.head(top_n)
+
+    # Plot
+    plt.figure(figsize=(12, 6))
+    category_counts.plot(kind='bar')
+    plt.title("Issue Type Distribution", fontsize=16)
+    plt.xlabel("Issue Types", fontsize=14)
+    plt.ylabel("Number of Tickets", fontsize=14)
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+# Example usage:
+# plot_issue_type_distribution("categorized_tickets.csv", category_col="category", top_n=20)
