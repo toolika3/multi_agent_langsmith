@@ -322,3 +322,33 @@ def plot_issue_type_distribution(csv_path, category_col="category", top_n=None):
 
 # Example usage:
 # plot_issue_type_distribution("categorized_tickets.csv", category_col="category", top_n=20)
+
+
+
+
+
+
+import pandas as pd
+
+# --- User Inputs ---
+input_file = "input.csv"       # Path to input CSV file
+output_file = "filtered_output.csv"  # Path to save filtered CSV
+date_column = "date"           # Column to filter on (must be in your CSV)
+start_date = "2023-01-01"      # Start date (inclusive)
+end_date = "2023-12-31"        # End date (inclusive)
+selected_columns = ["date", "name", "amount"]  # Columns to keep
+
+# --- Read CSV ---
+df = pd.read_csv(input_file, parse_dates=[date_column])
+
+# --- Filter by Date Range ---
+filtered_df = df[(df[date_column] >= start_date) & (df[date_column] <= end_date)]
+
+# --- Select Specific Columns ---
+filtered_df = filtered_df[selected_columns]
+
+# --- Save to New File ---
+filtered_df.to_csv(output_file, index=False)
+
+print(f"Filtered data saved to {output_file}")
+
