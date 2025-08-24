@@ -272,3 +272,53 @@ def plot_issue_type_distribution(csv_path, category_col="category", top_n=None):
 
 # Example usage:
 # plot_issue_type_distribution("categorized_tickets.csv", category_col="category", top_n=20)
+
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def plot_issue_type_distribution(csv_path, category_col="category", top_n=None):
+    """
+    Reads a CSV with ticket data and plots issue type distribution.
+    
+    Parameters:
+    - csv_path: Path to CSV file containing categorized tickets
+    - category_col: Column in CSV that contains assigned categories
+    - top_n: Show only top N categories by frequency
+    """
+    # Read categorized ticket data
+    tickets_df = pd.read_csv(csv_path)
+
+    if category_col not in tickets_df.columns:
+        raise ValueError(f"Column '{category_col}' not found in CSV. Available: {tickets_df.columns.tolist()}")
+
+    # Count frequency of categories
+    category_counts = tickets_df[category_col].value_counts()
+    category_percent = (category_counts / category_counts.sum()) * 100
+
+    if top_n:
+        category_counts = category_counts.head(top_n)
+        category_percent = category_percent.head(top_n)
+
+    # Plot
+    plt.figure(figsize=(12, 6))
+    bars = category_counts.plot(kind='bar', color='skyblue')
+
+    plt.title("Issue Type Distribution", fontsize=16)
+    plt.xlabel("Issue Types", fontsize=14)
+    plt.ylabel("Number of Tickets", fontsize=14)
+    plt.xticks(rotation=45, ha='right')
+
+    # Add count and percent labels above each bar
+    for idx, value in enumerate(category_counts.values):
+        percent_value = category_percent.values[idx]
+        plt.text(idx, value + (0.01 * category_counts.max()), 
+                 f'{value} ({percent_value:.1f}%)', 
+                 ha='center', va='bottom', fontsize=9)
+
+    plt.tight_layout()
+    plt.show()
+
+# Example usage:
+# plot_issue_type_distribution("categorized_tickets.csv", category_col="category", top_n=20)
